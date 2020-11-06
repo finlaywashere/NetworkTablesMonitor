@@ -1,54 +1,81 @@
 // Do not mess with the following 6 lines
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 plugins {
-  id 'com.github.johnrengelman.shadow' version '1.2.4'
+  id 'com.github.johnrengelman.shadow' version '5.1.0'
+  id 'java'
+  id 'application'
 }
 
-apply plugin: 'java'
-apply plugin: 'application'
-
-
-// This is where you select which operating system to build for.
-
-// Uncomment the line below to build for windows
-ext.buildType = "windows"
-
-// Uncomment the line below to build for linux
-//ext.buildType = "linux"
-
-// Uncomment the line below to build for a Raspberry Pi running raspbian
-//ext.buildType = "arm-raspbian"
-
-// Uncomment the line below to build for an armhf device such as a Jetson or a Beaglebone Black
-//ext.buildType = "armhf"
-
 // Change the line below if you change the name of your main Java class
+// Comment this line and uncomment the line after it to build/run the Server, and vice versa to run the main vision program
 mainClassName = 'ca.team2706.vision.trackerboxreloaded.NetworkTablesClient'
+
 // Change the line below to change the name of the output jar
 def projectName = 'NetworkTablesMonitor'
+def REPO_VERSION = '1.0'
+
+task setbuildType{
+  doFirst{
+  if (project.hasProperty('buildType')){
+    ext.buildType = project.findProperty("buildType")
+  }else{
+    println "No build type selected! Exiting!"
+    println "Options are: windows, arm-raspbian, linux-x86_64, armhf"
+    throw new GradleException('no build type selected!')
+  }
+  }
+}
+
+task settestType{
+  doFirst{
+  if (project.hasProperty('testType')){
+    ext.testType = project.findProperty("testType")
+  }else{
+    println "No test type selected! Assuming BuildType is the test type!"
+    if (project.hasProperty('buildType')){
+      ext.testType = project.findProperty("buildType")
+    }else{
+      println "No build type selected! Exiting!"
+      println "Options are: windows, arm-raspbian, linux-x86_64, armhf"
+      throw new GradleException('no build type selected!')
+    }
+  }
+  }
+}
 
 // Shouldn't need to change anything below this point
 apply from: 'dependencies.gradle'
 
+test {
+
+}
+
 sourceSets {
     main {
         java {
-            srcDir 'src'
+            srcDir 'src/'
         }
     }
 }
 
 repositories {
     mavenCentral()
+    
     maven {
-      url "http://first.wpi.edu/FRC/roborio/maven/release"
+       url "https://frcmaven.wpi.edu/artifactory/release/"
     }
+    // FIRST has removed this maven repo
+    //maven {
+    //  url "http://first.wpi.edu/FRC/roborio/maven/release"
+    //}
 }
 
 dependencies {
-  compile group: "edu.wpi.first.ntcore", name: "ntcore-java", version: "4.+"
-  runtime group: "edu.wpi.first.ntcore", name: "ntcore-jni", version: "4.+", classifier: "all"
-  runtime group: "edu.wpi.first.wpiutil", name: "wpiutil-java", version: "3.+"
-  compile 'org.opencv:opencv-java:3.1.0'
+  compile 'edu.wpi.first.wpiutil:wpiutil-java:2020.3.2'
+  compile 'edu.wpi.first.ntcore:ntcore-java:2020.3.2'
+  compile 'edu.wpi.first.thirdparty.frc2020.opencv:opencv-java:3.4.7-2'
+  compile 'edu.wpi.first.cameraserver:cameraserver-java:+:'
+  compile 'edu.wpi.first.wpilibj:wpilibj-java:+'
 }
 
 jar {
@@ -57,6 +84,17 @@ jar {
 
 shadowJar {
   baseName = projectName
+  //include("${project.rootDir}/master.cf", "${project.rootDir}/visionParams.properties")
+  from('${project.rootDir}') {
+    include 'master.cf'
+    include 'visionParams.properties'
+  }
+}
+task libraryJar(type: ShadowJar){
+	classifier = "lib"
+	configurations = [ project.configurations.runtime ]
+        manifest.inheritFrom project.tasks.jar.manifest
+        exclude('META-INF/INDEX.LIST', 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'ca/team2706/vision/**/*')
 }
 
 distributions {
@@ -77,35 +115,36 @@ def outputDirectory = file("${rootDir}/output")
 task writeExecuteScript() {
   dependsOn jar
   doLast {
-    if (buildType == "windows") {
-      def runFile = new File("${buildDir}/run${projectName}.bat")
-      runFile.write "java -Djava.library.path=. -jar ${projectName}-all.jar"
-    } else {
-      def runFile = new File("${buildDir}/run${projectName}")
-      runFile.write "java -Djava.library.path=. -jar ${projectName}-all.jar"
-    }
+    def runFile = new File("${buildDir}/run${projectName}.bat")
+    runFile.write "java -Djava.library.path=. -jar ${projectName}-all.jar"
+    def runFile2 = new File("${buildDir}/run${projectName}")
+    runFile2.write "#!/bin/bash\njava -Djava.library.path=. -jar ${projectName}-all.jar"
   }
 }
 
 task copyToOutput(type: Copy) {
+  dependsOn setbuildType
   dependsOn shadowJar
   dependsOn unzipOpenCv
   dependsOn writeExecuteScript
   destinationDir = outputDirectory
   from (file(shadowJar.archivePath)) {
   }
-  from (openCvUnzipLocation) {
-    exclude 'META-INF'
-    exclude '**/MANIFEST.MF'
+  if(project.buildType == "windowsx86-64"){
+    from ("$openCvUnzipLocation/windows/"+project.buildType.substring(7)) {
+      exclude '*.hash'
+    }
+  }else{
+    from ("$openCvUnzipLocation/linux/"+project.buildType.substring(5)) {
+      exclude '*.hash'
+    }
+  } 
+  from (file("${buildDir}/run${projectName}.bat")) {
   }
-  if (buildType == "windows") {
-    from (file("${buildDir}/run${projectName}.bat")) {
-    }
-  } else {
-    from (file("${buildDir}/run${projectName}")) {
-    }
+  from (file("${buildDir}/run${projectName}")) {
   }
 }
+
 
 task zipOutput(type: Zip) {
   baseName = projectName
@@ -119,23 +158,34 @@ task zipOutput(type: Zip) {
     exclude 'META-INF'
     exclude '**/MANIFEST.MF'
   }
-  if (buildType == "windows") {
-    from (file("${buildDir}/run${projectName}.bat")) {
-    }
-  } else {
-    from (file("${buildDir}/run${projectName}")) {
-      fileMode 0777
-    }
+  from (file("${buildDir}/run${projectName}.bat")) {
+  }
+  from (file("${buildDir}/run${projectName}")) {
+    fileMode 0777
   }
 }
+
+
+
+tasks.withType(Test) {
+    systemProperty "java.library.path", "${topenCvUnzipLocation}"
+    scanForTestClasses = false
+    include "**/*Test.class"
+}
+
+build.dependsOn setbuildType
+test.dependsOn settestType
 
 distZip.dependsOn unzipOpenCv
 distTar.dependsOn unzipOpenCv
 
 applicationDefaultJvmArgs = ["-Djava.library.path=${openCvUnzipLocation}"]
 
+test.dependsOn tunzipOpenCv
+
 build.dependsOn copyToOutput
 build.dependsOn zipOutput
+build.dependsOn libraryJar
 run.dependsOn unzipOpenCv
 
 clean {
